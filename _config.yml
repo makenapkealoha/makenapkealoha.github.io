@@ -1,3 +1,4 @@
 title: Makena Pollon
-logo: img/headshot_2025.jpg
-theme: jekyll-theme-minimal
+logo: img/headshot_smaller.png
+# theme: jekyll-theme-minimal
+theme: jekyll-theme-chirpy
