@@ -206,4 +206,14 @@ footer a:hover {
   .nav-links {
     display: none;
   }
+
+  .about-container {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .about-text {
+    text-align: center;
+  }
 }
+
