@@ -1,0 +1,169 @@
+/* Reset & global styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Poppins', sans-serif;
+  color: #222;
+  background-color: #fafafa;
+  line-height: 1.6;
+  scroll-behavior: smooth;
+}
+
+/* Navigation */
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.2rem 3rem;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo a {
+  text-decoration: none;
+  font-size: 1.5rem;
+  color: #333;
+  font-weight: 700;
+  transition: color 0.3s;
+}
+
+.logo a:hover {
+  color: #5c6bc0;
+}
+
+.nav-links {
+  list-style: none;
+  display: flex;
+  gap: 1.5rem;
+}
+
+.nav-links a {
+  text-decoration: none;
+  color: #333;
+  font-weight: 500;
+  transition: color 0.3s, transform 0.3s;
+}
+
+.nav-links a:hover {
+  color: #5c6bc0;
+  transform: translateY(-2px);
+}
+
+/* Hero section */
+.hero {
+  height: 90vh;
+  background: linear-gradient(120deg, #5c6bc0, #3949ab);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+}
+
+.hero-content h2 {
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+}
+
+.hero-content p {
+  font-size: 1.2rem;
+  margin-bottom: 2rem;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.btn {
+  display: inline-block;
+  background: #fff;
+  color: #3949ab;
+  padding: 0.75rem 1.5rem;
+  border-radius: 30px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.3s, background 0.3s;
+}
+
+.btn:hover {
+  background: #e8eaf6;
+  transform: scale(1.05);
+}
+
+/* About preview */
+.about-preview {
+  text-align: center;
+  padding: 4rem 2rem;
+  background: #fff;
+}
+
+.about-preview h3 {
+  font-size: 1.8rem;
+  margin-bottom: 1rem;
+}
+
+.about-preview p {
+  max-width: 700px;
+  margin: 0 auto 2rem;
+}
+
+.btn-outline {
+  border: 2px solid #3949ab;
+  color: #3949ab;
+  background: transparent;
+  padding: 0.75rem 1.5rem;
+  border-radius: 30px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.3s;
+}
+
+.btn-outline:hover {
+  background: #3949ab;
+  color: #fff;
+}
+
+/* Footer */
+footer {
+  text-align: center;
+  padding: 2rem;
+  font-size: 0.9rem;
+  background: #f1f1f1;
+}
+
+footer a {
+  color: #3949ab;
+  text-decoration: none;
+}
+
+footer a:hover {
+  text-decoration: underline;
+}
+
+/* Animation */
+.fade-in {
+  opacity: 0;
+  transform: translateY(20px);
+  animation: fadeIn 1.2s ease forwards;
+}
+
+@keyframes fadeIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .nav-links {
+    display: none;
+  }
+}
