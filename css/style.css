@@ -154,9 +154,14 @@ body {
 }
 
 section {
-  border: 1px solid #ccc;
+  /* border: 1px solid #ccc;
   padding: 15px;
-  margin-bottom: 10px;
+  margin-bottom: 10px; */
+  font-family: 'Poppins', sans-serif;
+  color: #222;
+  background-color: #fafafa;
+  line-height: 1.6;
+  scroll-behavior: smooth;
 }
 
 #about {
