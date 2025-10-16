@@ -12,47 +12,7 @@ body {
   padding: 0 10%;
 }
 
-/* .navbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1.2rem 3rem;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(10px);
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
 
-.logo a {
-  text-decoration: none;
-  font-size: 1.5rem;
-  color: #333;
-  font-weight: 700;
-  transition: color 0.3s;
-}
-
-.logo a:hover {
-  color: #5c6bc0;
-}
-
-.nav-links {
-  list-style: none;
-  display: flex;
-  gap: 1.5rem;
-}
-
-.nav-links a {
-  text-decoration: none;
-  color: #333;
-  font-weight: 500;
-  transition: color 0.3s, transform 0.3s;
-}
-
-.nav-links a:hover {
-  color: #5c6bc0;
-  transform: translateY(-2px);
-} */
 
 section {
   margin-bottom: 2.5rem;
@@ -62,26 +22,24 @@ section {
   box-shadow: 0 2px 8px rgba(0,0,0,0.4);
 }
 
-/* ===== HEADER & NAVIGATION ===== */
 
 header {
-  background-color: #f2f4ff;           /* Dark background */
-  padding: 1rem 10%;                   /* Space around content */
+  background-color: #f2f4ff;         
+  padding: 1rem 10%;                 
   box-shadow: 0 2px 4px rgba(0,0,0,0.4);
-  position: sticky;                    /* Keeps header visible on scroll */
+  /* position: sticky;                    */
   top: 0;
-  z-index: 1000;                       /* Ensures header stays above content */
+  z-index: 1000;                    
 }
 
 .navbar {
   display: flex;
-  justify-content: space-between;      /* Space between title and links */
+  justify-content: space-between;      
   align-items: center;
-  flex-wrap: wrap;                     /* Allows wrapping on small screens */
-}
+  flex-wrap: wrap;                    
 
 .logo a {
-  color: #ffffff;
+  color: #0a0a0a;
   text-decoration: none;
   font-size: 1.8rem;
   font-weight: bold;
@@ -90,24 +48,24 @@ header {
 }
 
 .logo a:hover {
-  color: #66aaff;                      /* Soft blue hover for logo */
+  color: #0a0a0a;                     
 }
 
 .nav-links {
   list-style: none;
   display: flex;
-  gap: 2rem;                           /* Space between nav items */
+  gap: 2rem;                           
 }
 
 .nav-links li a {
-  color: #b0b0b0;
+  color: #0a0a0a;
   text-decoration: none;
   font-size: 1.05rem;
   transition: color 0.3s ease;
 }
 
 .nav-links li a:hover {
-  color: #ffffff;                      /* Highlight on hover */
+  color: #0a0a0a;                 
 }
 
 /* ===== RESPONSIVE NAVIGATION ===== */
