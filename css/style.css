@@ -153,11 +153,11 @@ body {
   line-height: 1.6;
 }
 
-section {
+/* section {
   /* border: 1px solid #ccc;
   padding: 15px;
   margin-bottom: 10px; */
-  font-family: 'Poppins', sans-serif;
+  /* font-family: 'Poppins', sans-serif;
   color: #222;
   background-color: #fafafa;
   line-height: 1.6;
@@ -168,7 +168,7 @@ section {
   background-color: lightgray;
   padding: 20px;
   margin: 10px 0;
-}
+} */ 
 
 
 .btn-outline {
