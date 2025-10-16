@@ -11,7 +11,7 @@ body {
   line-height: 1.6;
   padding: 0 10%;
 }
-/* 
+
 .navbar {
   display: flex;
   justify-content: space-between;
@@ -22,7 +22,37 @@ body {
   position: sticky;
   top: 0;
   z-index: 100;
-} */
+}
+
+.logo a {
+  text-decoration: none;
+  font-size: 1.5rem;
+  color: #333;
+  font-weight: 700;
+  transition: color 0.3s;
+}
+
+.logo a:hover {
+  color: #5c6bc0;
+}
+
+.nav-links {
+  list-style: none;
+  display: flex;
+  gap: 1.5rem;
+}
+
+.nav-links a {
+  text-decoration: none;
+  color: #333;
+  font-weight: 500;
+  transition: color 0.3s, transform 0.3s;
+}
+
+.nav-links a:hover {
+  color: #5c6bc0;
+  transform: translateY(-2px);
+}
 
 section {
   margin-bottom: 2.5rem;
