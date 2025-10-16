@@ -6,15 +6,27 @@
 
 body {
   font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background-color: #121212;   /* Dark background */
-  color: #e0e0e0;              /* Light gray text */
+  background-color: #524f4f;  
+  color: #fcf7f7;             
   line-height: 1.6;
   padding: 0 10%;
 }
 
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.2rem 3rem;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
 section {
   margin-bottom: 2.5rem;
-  background-color: #1c1c1c;
+  background-color: #3a499e;
   padding: 1.5rem;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.4);
