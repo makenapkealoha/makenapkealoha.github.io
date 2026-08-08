@@ -1,0 +1,3 @@
+User-agent: *
+Disallow: /supplementary.html
+Disallow: /notes/

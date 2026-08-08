@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Makena Pollon — Statistics &amp; Data Science, UCLA</title>
+  <meta name="description" content="Makena Pollon is a PhD student in Statistics and Data Science at UCLA researching network tomography and optimization." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <script>document.documentElement.classList.add('js');</script>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <nav class="site-nav">
+    <p class="wordmark">
+      <a href="index.html">Makena <span class="surname">Pollon</span></a>
+    </p>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="experience.html">Experience</a></li>
+      <li><a href="projects.html">Work</a></li>
+    </ul>
+  </nav>
+
+  <main id="main">
+    <div class="shell">
+
+      <!-- ===== Hero ===== -->
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">PhD Candidate · UCLA Statistics</p>
+          <h1>Inferring what can't be measured <em>directly</em>.</h1>
+          <p class="hero-lede">
+            I work on network tomography and optimization — recovering the behavior of
+            a network's interior using only the measurements you can actually take,
+            at its edges.
+          </p>
+          <div class="hero-actions">
+            <a class="btn" href="projects.html">See the work <span class="arrow">→</span></a>
+            <a class="btn-ghost" href="experience.html">Experience <span class="arrow">→</span></a>
+          </div>
+        </div>
+
+        <figure class="network-figure">
+          <canvas id="network-canvas" role="img"
+                  aria-label="An animated network diagram. Terminal nodes at the edges are lit and observable; the interior nodes and links are drawn faintly, and probes travel between terminals to illuminate the paths they cross."></canvas>
+          <figcaption class="network-legend">
+            <span class="key-observed"><i></i> Measured path</span>
+            <span><i></i> Inferred interior</span>
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- ===== Focus ===== -->
+      <section class="section reveal">
+        <div class="section-head">
+          <p class="eyebrow">Research focus</p>
+          <h2>Three things I spend my time on.</h2>
+        </div>
+
+        <div class="card-grid">
+          <article class="card">
+            <h3>Network tomography</h3>
+            <p>
+              Estimating internal link characteristics — delay, loss, structure — from
+              end-to-end observations, when direct measurement of the interior isn't
+              available.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Optimization</h3>
+            <p>
+              The machinery that makes those estimates tractable: formulating the
+              problem so a solution exists, and finding it at a scale that's useful.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Teaching</h3>
+            <p>
+              Six courses as a teaching assistant at UCLA, from introductory
+              statistical reasoning through Monte Carlo methods and consulting practice.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <!-- ===== About preview ===== -->
+      <section class="section reveal">
+        <div class="portrait-block">
+          <div class="portrait">
+            <img src="img/headshot_smaller.png" alt="Portrait of Makena Pollon" width="200" height="200" />
+          </div>
+          <div class="portrait-text">
+            <p class="eyebrow">About</p>
+            <h2>Statistics, slowly and thoroughly.</h2>
+            <p>
+              I came to statistics through applied mathematics and, less predictably,
+              German language and culture — two degrees I finished at Cal State Long
+              Beach before starting my PhD at UCLA in 2022.
+            </p>
+            <p>
+              I like problems where the answer is hiding behind what you're allowed to
+              observe, and I like taking the time to actually understand a method rather
+              than just apply it.
+            </p>
+            <a class="btn-ghost" href="experience.html">Full background <span class="arrow">→</span></a>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>
+        <p class="eyebrow" style="margin-bottom: 0.9rem;">Get in touch</p>
+        <a class="footer-mail" href="mailto:makenapkealoha@ucla.edu">makenapkealoha@ucla.edu</a>
+      </div>
+      <p class="footer-meta">
+        Department of Statistics &amp; Data Science<br />
+        University of California, Los Angeles<br />
+        © 2026 Makena Pollon
+      </p>
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
+  <script src="js/network.js"></script>
+</body>
+</html>
