@@ -1,3 +1,6 @@
 User-agent: *
 Disallow: /supplementary.html
 Disallow: /notes/
+Disallow: /link-explorer.html
+Disallow: /data/
+Disallow: /tree-lab.html
