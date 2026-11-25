@@ -1127,6 +1127,9 @@ p a:hover {
 .lab-neg-key { color: var(--lab-neg); background: rgba(255, 138, 115, 0.10); padding: 0 0.25rem; }
 .is-better-key { background: var(--lab-good); color: var(--paper); padding: 0 0.25rem; }
 .lab-mono { font-family: var(--mono); }
+.lab-num.is-pending { color: var(--mist-dim); text-align: center !important; }
+.lab-k-label { font-size: 0.85rem; color: var(--mist); }
+#lab-K { width: 3.6rem; }
 .lab-empty { color: var(--mist); padding: 0.5rem 0; }
 
 
