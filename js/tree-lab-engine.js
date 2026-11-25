@@ -73,22 +73,44 @@
     return out;
   }
 
-  // Least squares on the columns `cols` of A (via normal equations).
+  // Least squares on the columns `cols` of A by Householder QR (more accurate than
+  // the normal equations when route weights make the columns badly scaled).
   function lsqCols(A, b, cols) {
-    const k = cols.length;
-    const G = Array.from({ length: k }, () => new Array(k).fill(0));
-    const r = new Array(k).fill(0);
-    for (let i = 0; i < A.length; i++) {
-      const row = A[i];
-      for (let a = 0; a < k; a++) {
-        const va = row[cols[a]];
-        if (va === 0) continue;
-        r[a] += va * b[i];
-        for (let c = a; c < k; c++) G[a][c] += va * row[cols[c]];
+    const n = A.length, k = cols.length;
+    const R = A.map(row => cols.map(j => row[j]));
+    const y = b.slice();
+    const steps = Math.min(n, k);
+    for (let c = 0; c < steps; c++) {
+      let nrm = 0;
+      for (let i = c; i < n; i++) nrm += R[i][c] * R[i][c];
+      nrm = Math.sqrt(nrm);
+      if (nrm === 0) continue;
+      const alpha = R[c][c] > 0 ? -nrm : nrm;
+      const v = new Array(n).fill(0);
+      v[c] = R[c][c] - alpha;
+      for (let i = c + 1; i < n; i++) v[i] = R[i][c];
+      let vv = 0;
+      for (let i = c; i < n; i++) vv += v[i] * v[i];
+      if (vv === 0) continue;
+      for (let j = c; j < k; j++) {
+        let d = 0;
+        for (let i = c; i < n; i++) d += v[i] * R[i][j];
+        d = 2 * d / vv;
+        for (let i = c; i < n; i++) R[i][j] -= d * v[i];
       }
+      let d = 0;
+      for (let i = c; i < n; i++) d += v[i] * y[i];
+      d = 2 * d / vv;
+      for (let i = c; i < n; i++) y[i] -= d * v[i];
     }
-    for (let a = 0; a < k; a++) for (let c = 0; c < a; c++) G[a][c] = G[c][a];
-    return spdSolve(G, r);
+    const scale = Math.max(1e-300, ...Array.from({ length: steps }, (_, i) => Math.abs(R[i][i])));
+    const z = new Array(k).fill(0);
+    for (let i = steps - 1; i >= 0; i--) {
+      let s = y[i];
+      for (let j = i + 1; j < k; j++) s -= R[i][j] * z[j];
+      z[i] = Math.abs(R[i][i]) > 1e-13 * scale ? s / R[i][i] : 0;
+    }
+    return z;
   }
 
   /* ---------- estimators ---------- */
@@ -102,8 +124,13 @@
   // Lawson–Hanson NNLS: min ||X b - y|| subject to b >= 0.
   function nnls(A, b, maxIter) {
     const p = A[0].length;
-    const tol = 1e-10 * Math.max(1, Math.max(...A.map(r => Math.max(...r.map(Math.abs))))) *
-                Math.max(1, Math.max(...b.map(Math.abs)));
+    let colMax = 0;
+    for (let j = 0; j < p; j++) {
+      let c = 0;
+      for (let i = 0; i < A.length; i++) c += A[i][j] * A[i][j];
+      colMax = Math.max(colMax, Math.sqrt(c));
+    }
+    const tol = 1e-12 * Math.max(1e-300, colMax) * Math.max(1e-300, norm(b));
     maxIter = maxIter || 30 * p;
     let x = new Array(p).fill(0);
     const passive = new Array(p).fill(false);
@@ -121,17 +148,125 @@
         const zP = lsqCols(A, b, P);
         const z = new Array(p).fill(0);
         P.forEach((j, k) => { z[j] = zP[k]; });
-        if (P.every(j => z[j] > tol)) { x = z; break; }
+        if (P.every(j => z[j] > 0)) { x = z; break; }
         let alpha = Infinity;
-        for (const j of P) if (z[j] <= tol) alpha = Math.min(alpha, x[j] / (x[j] - z[j]));
+        for (const j of P) if (z[j] <= 0) alpha = Math.min(alpha, x[j] / (x[j] - z[j]));
         for (let j = 0; j < p; j++) x[j] += alpha * (z[j] - x[j]);
-        for (const j of P) if (x[j] <= tol) { passive[j] = false; x[j] = 0; }
+        for (const j of P) if (x[j] <= 1e-15 * Math.max(1, Math.abs(z[j]))) { passive[j] = false; x[j] = 0; }
         if (iter >= maxIter) break;
       }
       const resid = b.map((bi, i) => bi - A[i].reduce((s, a, j) => s + a * x[j], 0));
       w = matTVec(A, resid);
     }
     return x.map(v => (v < 0 ? 0 : v));
+  }
+
+  // NNLS from the Gram form (Bro & de Jong's fast NNLS): G = A'A, h = A'b.
+  // `start` is an optional starting passive set (e.g. the support of a nearby fit);
+  // the result is the same minimiser, it is only reached in fewer steps.
+  function nnlsGram(G, h, bNorm, start) {
+    const p = h.length;
+    let diagMax = 0;
+    for (let j = 0; j < p; j++) diagMax = Math.max(diagMax, G[j][j]);
+    const tol = 1e-12 * Math.sqrt(Math.max(1e-300, diagMax)) * Math.max(1e-300, bNorm);
+    const passive = new Array(p).fill(false), blocked = new Array(p).fill(false);
+    let x = new Array(p).fill(0);
+    // Cholesky factor of G[P,P], grown one column at a time.
+    let P = [], L = [];
+    const addCol = j => {
+      const k = P.length, l = new Array(k);
+      for (let i = 0; i < k; i++) {
+        let s2 = G[P[i]][j];
+        for (let t = 0; t < i; t++) s2 -= L[i][t] * l[t];
+        l[i] = s2 / L[i][i];
+      }
+      let d = G[j][j];
+      for (let t = 0; t < k; t++) d -= l[t] * l[t];
+      if (!(d > 1e-12 * Math.max(G[j][j], 1e-300))) return false;   // dependent column
+      l.push(Math.sqrt(d));
+      L.push(l); P.push(j);
+      return true;
+    };
+    const rebuild = () => {
+      const keep = P.filter(j => passive[j]);
+      P = []; L = [];
+      for (const j of keep) if (!addCol(j)) { passive[j] = false; blocked[j] = true; }
+    };
+    const solveP = () => {
+      const k = P.length, y = new Array(k), zP = new Array(k);
+      for (let i = 0; i < k; i++) {
+        let s2 = h[P[i]];
+        for (let t = 0; t < i; t++) s2 -= L[i][t] * y[t];
+        y[i] = s2 / L[i][i];
+      }
+      for (let i = k - 1; i >= 0; i--) {
+        let s2 = y[i];
+        for (let t = i + 1; t < k; t++) s2 -= L[t][i] * zP[t];
+        zP[i] = s2 / L[i][i];
+      }
+      const z = new Array(p).fill(0);
+      P.forEach((j, i) => { z[j] = zP[i]; });
+      return z;
+    };
+    const inner = () => {
+      for (let guard = 0; guard < 4 * p + 10; guard++) {
+        const z = solveP();
+        if (P.every(j => z[j] > 0)) { x = z; return; }
+        let alpha = Infinity;
+        for (const j of P) if (z[j] <= 0) alpha = Math.min(alpha, x[j] / (x[j] - z[j]));
+        if (!Number.isFinite(alpha)) alpha = 0;
+        for (let j = 0; j < p; j++) x[j] += alpha * (z[j] - x[j]);
+        let removed = false;
+        for (const j of P) if (x[j] <= 1e-15 * Math.max(1, Math.abs(z[j])) || (alpha === 0 && z[j] <= 0)) {
+          passive[j] = false; x[j] = 0; removed = true;
+        }
+        if (!removed) return;
+        rebuild();
+      }
+    };
+    if (start && start.length) {
+      for (const j of start) if (addCol(j)) passive[j] = true;
+      inner();
+    }
+    for (let iter = 0; iter < 30 * p + 10; iter++) {
+      let jmax = -1, wmax = tol;
+      for (let j = 0; j < p; j++) {
+        if (passive[j] || blocked[j]) continue;
+        let w = h[j];
+        for (const c of P) w -= G[j][c] * x[c];
+        if (w > wmax) { wmax = w; jmax = j; }
+      }
+      if (jmax < 0) break;
+      if (!addCol(jmax)) { blocked[jmax] = true; continue; }
+      passive[jmax] = true;
+      inner();
+    }
+    return x.map(v => (v < 0 ? 0 : v));
+  }
+
+  // Vanilla NNLS on the unweighted route means, through the Gram solver.
+  function nnlsUnit(X, ybar) {
+    const gs = weightedGram(X, X.map(() => 1), ybar);
+    return nnlsGram(gs.G, gs.h, gs.bNorm);
+  }
+
+  // Gram system of a weighted 0/1 route design, built from the sparse rows.
+  function weightedGram(X, w, ybar) {
+    const p = X[0].length;
+    const G = Array.from({ length: p }, () => new Array(p).fill(0));
+    const h = new Array(p).fill(0);
+    let bb = 0;
+    X.forEach((row, i) => {
+      const on = [];
+      for (let j = 0; j < p; j++) if (row[j] !== 0) on.push(j);
+      const w2 = w[i] * w[i];
+      for (const a of on) {
+        h[a] += w2 * row[a] * ybar[i];
+        for (const c of on) G[a][c] += w2 * row[a] * row[c];
+      }
+      bb += w2 * ybar[i] * ybar[i];
+    });
+    return { G, h, bNorm: Math.sqrt(bb) };
   }
 
   /* ---------- tree -> design ---------- */
@@ -191,12 +326,176 @@
     const rng = mulberry32(opts.seed);
     const beta = design.superLinks.map(s => s.truth);
     const clean = matVec(design.Xs, beta);
-    const ybar = clean.map(mu => {
-      let s = 0;
-      for (let k = 0; k < m; k++) s += mu + sigma * gaussian(rng);
-      return s / m;
+    const probes = clean.map(mu => {
+      const v = new Array(m);
+      for (let k = 0; k < m; k++) v[k] = mu + sigma * gaussian(rng);
+      return v;
     });
-    return { beta, ybar, ols: olsMinNorm(design.Xs, ybar), nnls: nnls(design.Xs, ybar) };
+    const ybar = probes.map(v => v.reduce((s, a) => s + a, 0) / m);
+    const alpha = lassoAlpha(opts, design.Xs);
+    return { beta, probes, ybar, alpha,
+             ols: olsMinNorm(design.Xs, ybar),
+             lasso: lasso(design.Xs, ybar, alpha),
+             nnls: nnlsUnit(design.Xs, ybar) };
+  }
+
+  /* ---------- vanilla LASSO (no intercept, no sign constraint) ---------- */
+  // Minimises (1/(2n)) ||y - X b||^2 + alpha ||b||_1, the scikit-learn objective,
+  // by cyclic coordinate descent on the sparse 0/1 columns.
+  function lassoAlpha(opts, X) {
+    if (opts.lassoAlpha !== null && opts.lassoAlpha !== undefined && opts.lassoAlpha !== "" &&
+        Number.isFinite(Number(opts.lassoAlpha)))
+      return Math.max(0, Number(opts.lassoAlpha));
+    const n = X.length, p = X[0].length;
+    const sdMean = Math.max(0, opts.sigma) / Math.sqrt(Math.max(1, Math.round(opts.probes)));
+    // universal level sigma_ybar * sqrt(2 log p / n), floored so alpha > 0
+    return Math.max(1e-4, sdMean * Math.sqrt(2 * Math.log(Math.max(2, p)) / n));
+  }
+
+  function lasso(X, y, alpha, maxSweeps, tol) {
+    const n = X.length, p = X[0].length;
+    maxSweeps = maxSweeps || 20000; tol = tol || 1e-11;
+    const rowsOf = Array.from({ length: p }, (_, j) => {
+      const idx = [];
+      for (let i = 0; i < n; i++) if (X[i][j] !== 0) idx.push(i);
+      return idx;
+    });
+    const colsq = rowsOf.map((idx, j) => idx.reduce((s, i) => s + X[i][j] * X[i][j], 0));
+    const b = new Array(p).fill(0), r = y.slice();
+    const thr = n * alpha;
+    for (let sweep = 0; sweep < maxSweeps; sweep++) {
+      let maxDelta = 0, maxB = 0;
+      for (let j = 0; j < p; j++) {
+        if (colsq[j] === 0) continue;
+        let rho = colsq[j] * b[j];
+        for (const i of rowsOf[j]) rho += X[i][j] * r[i];
+        const nb = rho > thr ? (rho - thr) / colsq[j] : rho < -thr ? (rho + thr) / colsq[j] : 0;
+        const d = nb - b[j];
+        if (d !== 0) {
+          for (const i of rowsOf[j]) r[i] -= X[i][j] * d;
+          b[j] = nb;
+          maxDelta = Math.max(maxDelta, Math.abs(d));
+        }
+        maxB = Math.max(maxB, Math.abs(b[j]));
+      }
+      if (maxDelta <= tol * Math.max(1, maxB)) break;
+    }
+    return b;
+  }
+
+  /* ---------- stability-selected NNLS (the paper's Algorithm 1 + refit) ---------- */
+  // Heteroskedastic route weights w_i = m_i / v_i on the route means; B subsamples of
+  // max(2, floor(m_i/2)) probes drawn within each route (with replacement, as in the
+  // simulation code); NNLS on each subsample; selection frequency pi_j(c) of
+  // {beta_j > c sqrt(2 log p / N_eff_j)} over the c-grid; stable set
+  // S = {j : pi_j(c*) >= pi0}; non-negative refit on S with the full-data weights.
+  const C_GRID = Array.from({ length: 100 }, (_, i) => Math.pow(10, -7 + 12 * i / 99));
+
+  function routeWeights(probesByRoute) {
+    const w = [], ybar = [];
+    probesByRoute.forEach(v => {
+      const m = v.length, mean = v.reduce((t, a) => t + a, 0) / m;
+      const varr = m > 1 ? v.reduce((t, a) => t + (a - mean) * (a - mean), 0) / (m - 1) : 0;
+      w.push(Math.sqrt(m / Math.max(varr, 1e-8))); ybar.push(mean);
+    });
+    return { w, ybar };
+  }
+
+  // Weighted design and response W^{1/2} X, W^{1/2} ybar (kept for checking).
+  function weightedSystem(X, probesByRoute) {
+    const { w, ybar } = routeWeights(probesByRoute);
+    return { Xw: X.map((r, i) => r.map(a => a * w[i])), yw: ybar.map((v, i) => v * w[i]) };
+  }
+
+  function ssStart(design, sim, opts) {
+    const B = Math.max(1, Math.round(opts.B || 100));
+    const X = design.Xs;
+    const full = routeWeights(sim.probes);
+    const gs = weightedGram(X, full.w, full.ybar);
+    const xFull = nnlsGram(gs.G, gs.h, gs.bNorm);
+    const start = [];
+    xFull.forEach((v, j) => { if (v > 0) start.push(j); });
+    return { design, probes: sim.probes, B, pi0: opts.pi0, done: 0, start, fullGram: gs,
+             rng: mulberry32((opts.seed >>> 0) * 2654435761 + 97),
+             coef: [], thr: [] };
+  }
+
+  // Run subsamples until `budgetMs` has passed (or all B are done). Returns true when finished.
+  function ssStep(state, budgetMs) {
+    const t0 = Date.now(), X = state.design.Xs, p = X[0].length;
+    const logTerm = 2 * Math.log(Math.max(p, 1));
+    while (state.done < state.B && Date.now() - t0 < budgetMs) {
+      const sub = state.probes.map(v => {
+        const ns = Math.max(2, Math.floor(v.length / 2));
+        const s = new Array(ns);
+        for (let k = 0; k < ns; k++) s[k] = v[Math.floor(state.rng() * v.length)];
+        return s;
+      });
+      const { w, ybar } = routeWeights(sub);
+      const gs = weightedGram(X, w, ybar);
+      state.coef.push(nnlsGram(gs.G, gs.h, gs.bNorm, state.start));
+      state.thr.push(gs.G.map((row, j) => (row[j] > 0 ? Math.sqrt(logTerm / row[j]) : Infinity)));
+      state.done++;
+    }
+    return state.done >= state.B;
+  }
+
+  function ssFinish(state) {
+    const X = state.design.Xs, p = X[0].length, B = state.coef.length;
+    const freqAt = c => {
+      const f = new Array(p).fill(0);
+      for (let b = 0; b < B; b++) for (let j = 0; j < p; j++)
+        if (state.coef[b][j] > c * state.thr[b][j]) f[j] += 1 / B;
+      return f;
+    };
+    const freqs = C_GRID.map(freqAt);
+    const fmax = new Array(p).fill(0);
+    freqs.forEach(f => f.forEach((v, j) => { if (v > fmax[j]) fmax[j] = v; }));
+    let cStar = C_GRID[0], fStar = freqs[0];
+    C_GRID.forEach((c, i) => {
+      if (freqs[i].every((v, j) => Math.abs(v - fmax[j]) < 1e-12)) { cStar = c; fStar = freqs[i]; }
+    });
+    const stable = [];
+    fStar.forEach((v, j) => { if (v >= state.pi0 - 1e-12) stable.push(j); });
+    const est = new Array(p).fill(0);
+    if (stable.length) {
+      const { G, h, bNorm } = state.fullGram;
+      const sub = nnlsGram(stable.map(a => stable.map(c => G[a][c])), stable.map(a => h[a]), bNorm);
+      stable.forEach((j, k) => { est[j] = sub[k]; });
+    }
+    return { est, freq: fStar, cStar, stable, B };
+  }
+
+  /* ---------- NDCG@K with ties ---------- */
+  // Gains are max(true delay, 0). Links are ranked by estimate; links whose estimates
+  // tie share a rank (e.g. 3rd). If a tied group reaches past K, the whole group is
+  // counted and no later group is. A tied group's credit is its average gain times the
+  // average discount 1/log2(position + 1) over the positions it takes up, so a tie can
+  // never score better than a correct order (this is scikit-learn's tie rule apart from
+  // keeping the whole boundary group). The ideal DCG uses the same number of links.
+  function ndcgAtK(truth, est, K, tieTol) {
+    tieTol = tieTol === undefined ? 1e-9 : tieTol;
+    const p = truth.length;
+    K = Math.max(1, Math.min(Math.round(K), p));
+    const gains = truth.map(t => Math.max(t, 0));
+    const order = est.map((e, i) => i).sort((a, b) => est[b] - est[a]);
+    const disc = q => 1 / Math.log2(q + 1);
+    let pos = 0, dcg = 0;
+    const ranks = new Array(p).fill(null);
+    for (let s = 0; s < p && pos < K;) {
+      let e = s;
+      while (e + 1 < p && Math.abs(est[order[e + 1]] - est[order[s]]) <= tieTol) e++;
+      const size = e - s + 1;
+      let dsum = 0, gsum = 0;
+      for (let q = pos + 1; q <= pos + size; q++) dsum += disc(q);
+      for (let t = s; t <= e; t++) { gsum += gains[order[t]]; ranks[order[t]] = pos + 1; }
+      dcg += (gsum / size) * dsum;
+      pos += size; s = e + 1;
+    }
+    const sorted = gains.slice().sort((a, b) => b - a);
+    let idcg = 0;
+    for (let q = 1; q <= pos; q++) idcg += sorted[q - 1] * disc(q);
+    return { ndcg: idcg > 0 ? dcg / idcg : null, counted: pos, K, ranks };
   }
 
   /* ---------- metrics ---------- */
@@ -322,7 +621,8 @@
   }
 
   const api = { mulberry32, gaussian, olsMinNorm, nnls, nnlsIsUnique, nullSpace,
-                buildDesign, simulate, metrics, rank };
+                buildDesign, simulate, metrics, rank, lasso, lassoAlpha,
+                ssStart, ssStep, ssFinish, weightedSystem, nnlsGram, nnlsUnit, weightedGram, ndcgAtK, C_GRID };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TreeLabEngine = api;
 })(typeof window !== "undefined" ? window : this);

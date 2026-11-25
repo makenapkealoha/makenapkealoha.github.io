@@ -17,7 +17,7 @@
   let nodes = [];                 // {id, parent, delay}
   let nextId = 0;
   let selected = null;            // node id
-  let sim = { probes: 10, sigma: 0.01, seed: 1, zeroTol: 0.01 };
+  let sim = { probes: 10, sigma: 0.01, seed: 1, zeroTol: 0.01, lassoAlpha: null, B: 100, pi0: 0.9, K: 4 };
   let linksAsRows = false;
   let fillSeed = 1;
 
@@ -204,6 +204,20 @@
           </div>
           <p class="lab-small">An estimate counts as zero when its size is at most the zero tolerance,
             and as positive when it is above it.</p>
+          <div class="lab-row">
+            <label for="lab-alpha">LASSO penalty &alpha;</label>
+            <input id="lab-alpha" type="number" min="0" step="0.0005" placeholder="auto" />
+          </div>
+          <p class="lab-small">Leave blank for the automatic choice
+            &alpha; = (&sigma;/&radic;m)&middot;&radic;(2 log p / n), the noise level of a route mean times the universal factor.</p>
+          <div class="lab-row">
+            <label for="lab-B">Stability subsamples B</label>
+            <input id="lab-B" type="number" min="5" max="500" step="5" />
+          </div>
+          <div class="lab-row">
+            <label for="lab-pi0">Stability cutoff &pi;<sub>0</sub></label>
+            <input id="lab-pi0" type="number" min="0.05" max="1" step="0.05" />
+          </div>
         </details>
 
         <div class="lab-card">
@@ -235,8 +249,10 @@
 
     <div class="lab-block" id="lab-results-wrap">
       <div class="lab-block-head lab-results-head">
-        <p class="eyebrow">Vanilla OLS vs vanilla NNLS on this design</p>
+        <p class="eyebrow">OLS, LASSO and NNLS on this design</p>
         <div class="lab-row lab-buttons">
+          <label for="lab-K" class="lab-k-label">NDCG at K</label>
+          <input id="lab-K" type="number" min="1" step="1" />
           <button class="lab-btn" id="lab-redraw" type="button">New noise draw</button>
           <button class="lab-btn" id="lab-orient" type="button">Show links as rows</button>
         </div>
@@ -474,6 +490,52 @@
   }
 
   /* ---------- results ---------- */
+  const EST = [
+    { key: "ols",   name: "Vanilla OLS",             short: "OLS" },
+    { key: "lasso", name: "Vanilla LASSO",           short: "LASSO" },
+    { key: "nnls",  name: "Vanilla NNLS",            short: "NNLS" },
+    { key: "ss",    name: "Stability-selected NNLS", short: "SS-NNLS" },
+  ];
+  let fitCache = { key: null, value: null };
+  let ssCache = { key: null, value: null };
+  let ssJob = null;                         // { key, state, timer }
+
+  function designKey() {
+    return JSON.stringify([nodes.map(n => [n.id, n.parent, Number(n.delay) || 0]),
+                           sim.probes, sim.sigma, sim.seed, sim.lassoAlpha]);
+  }
+
+  function getFits(D) {
+    const key = designKey();
+    if (fitCache.key !== key) fitCache = { key, value: E.simulate(D, sim) };
+    return fitCache.value;
+  }
+
+  // Stability selection runs in short slices so the page stays responsive.
+  function stability(D, r) {
+    const key = fitCache.key + "|" + sim.B + "|" + sim.pi0;
+    if (ssCache.key === key) return { done: true, value: ssCache.value };
+    if (!ssJob || ssJob.key !== key) {
+      if (ssJob) clearTimeout(ssJob.timer);
+      ssJob = { key, state: E.ssStart(D, r, { B: sim.B, pi0: sim.pi0, seed: sim.seed }), timer: null };
+      const tick = () => {
+        if (!ssJob || ssJob.key !== key) return;
+        const finished = E.ssStep(ssJob.state, 30);
+        const prog = document.getElementById("lab-ss-progress");
+        if (prog) prog.textContent = `${ssJob.state.done} of ${ssJob.state.B} subsamples`;
+        if (finished) {
+          ssCache = { key, value: E.ssFinish(ssJob.state) };
+          ssJob = null;
+          if (fitCache.key + "|" + sim.B + "|" + sim.pi0 === key) renderResults(E.buildDesign(nodes));
+        } else {
+          ssJob.timer = setTimeout(tick, 0);
+        }
+      };
+      ssJob.timer = setTimeout(tick, 0);
+    }
+    return { done: false, progress: ssJob.state.done, B: ssJob.state.B };
+  }
+
   function renderResults(D) {
     const out = $("lab-results");
     if (!D.order.length) {
@@ -485,29 +547,26 @@
       return;
     }
     let r;
-    try { r = E.simulate(D, sim); }
+    try { r = getFits(D); }
     catch (err) { out.innerHTML = `<p class="lab-empty">The fit could not be computed: ${esc(err.message)}</p>`; return; }
-    const mO = E.metrics(r.beta, r.ols, sim.zeroTol);
-    const mN = E.metrics(r.beta, r.nnls, sim.zeroTol);
+    const ss = stability(D, r);
+    const est = { ols: r.ols, lasso: r.lasso, nnls: r.nnls, ss: ss.done ? ss.value.est : null };
+    const avail = EST.filter(e => est[e.key]);
+    const m = {}, nd = {};
+    const K = Math.max(1, Math.min(Math.round(sim.K) || 1, r.beta.length));
+    avail.forEach(e => { m[e.key] = E.metrics(r.beta, est[e.key], sim.zeroTol); nd[e.key] = E.ndcgAtK(r.beta, est[e.key], K); });
+
     const nSL = D.superLinks.length, nR = D.routes.length;
     const rank = E.rank(D.Xs);
-    // Identifiability of THIS delay vector: with noise-free route means, is the
-    // truth the only non-negative vector that fits them exactly?
     let identifiable = null;
     if (r.beta.every(v => v >= 0)) {
       try { identifiable = E.nnlsIsUnique(D.Xs, r.beta); } catch (e) { identifiable = null; }
     }
-    const olsExact = norm2(E.olsMinNorm(D.Xs, E.simulate(D, Object.assign({}, sim, { sigma: 0 })).ybar)
-                           .map((v, j) => v - r.beta[j])) < 1e-8;
+    const clean = D.Xs.map(row => row.reduce((t, a, j) => t + a * r.beta[j], 0));
+    const olsExact = norm2(E.olsMinNorm(D.Xs, clean).map((v, j) => v - r.beta[j])) < 1e-8;
 
-    // design summary
     const merged = D.superLinks.filter(s => s.ids.length > 1);
-    const facts = [
-      ["Links", D.order.length],
-      ["Super-links fitted", nSL],
-      ["Routes", nR],
-      ["Rank of design", `${rank} of ${nSL}`],
-    ];
+    const facts = [["Links", D.order.length], ["Super-links fitted", nSL], ["Routes", nR], ["Rank of design", `${rank} of ${nSL}`]];
     const notes = [];
     if (merged.length) notes.push(`Links that lie on exactly the same routes cannot be told apart, so each such group is fitted as one super-link whose true delay is the sum: ${merged.map(s => `<span class="lab-mono">${esc(s.label)}</span>`).join(", ")}.`);
     notes.push(rank < nSL
@@ -517,73 +576,93 @@
     if (identifiable === false) notes.push(`<strong>Not identifiable under non-negativity:</strong> even with noise-free route measurements, another non-negative delay vector fits exactly as well as the true one, so NNLS cannot be guaranteed to find the truth on this design and delay pattern.`);
     if (identifiable === null) notes.push(`Some true delays are negative, so the identifiability check under non-negativity does not apply.`);
 
+    const ssLine = ss.done
+      ? `Stability selection: ${ss.value.stable.length} of ${nSL} super-links stable at &pi;<sub>0</sub> = ${sim.pi0} (B = ${ss.value.B}, c* = ${ss.value.cStar.toExponential(1)}), then refitted by NNLS on that set.`
+      : `Stability selection is running: <span id="lab-ss-progress">${ss.progress} of ${ss.B} subsamples</span>. Its column fills in when it finishes.`;
+
     // reconstruction table
     const cols = D.superLinks;
     const cell = (v, kind) => {
+      if (v === null || v === undefined) return `<td class="lab-num is-pending">…</td>`;
       const neg = v < -sim.zeroTol, zero = Math.abs(v) <= sim.zeroTol;
       return `<td class="lab-num${neg ? " is-neg" : ""}${zero ? " is-zero" : ""}${kind ? " " + kind : ""}">${fmt(v)}</td>`;
     };
+    const estOf = (e, j) => (est[e.key] ? est[e.key][j] : null);
     let table;
     if (!linksAsRows) {
       table = `<table class="lab-table lab-recon">
         <thead><tr><th scope="col"></th>${cols.map(s => `<th scope="col" class="lab-mono">${esc(s.label)}</th>`).join("")}</tr></thead>
         <tbody>
           <tr class="is-truth"><th scope="row">True delay</th>${r.beta.map(v => cell(v)).join("")}</tr>
-          <tr><th scope="row">Vanilla OLS</th>${r.ols.map(v => cell(v)).join("")}</tr>
-          <tr><th scope="row">Vanilla NNLS</th>${r.nnls.map(v => cell(v)).join("")}</tr>
+          ${EST.map(e => `<tr><th scope="row">${e.name}</th>${cols.map((_, j) => cell(estOf(e, j))).join("")}</tr>`).join("")}
         </tbody></table>`;
     } else {
       table = `<table class="lab-table lab-recon lab-recon-rows">
-        <thead><tr><th scope="col">Super-link</th><th scope="col">True delay</th><th scope="col">Vanilla OLS</th><th scope="col">Vanilla NNLS</th></tr></thead>
-        <tbody>${cols.map((s, j) => `<tr><th scope="row" class="lab-mono">${esc(s.label)}</th>${cell(r.beta[j], "is-truthcell")}${cell(r.ols[j])}${cell(r.nnls[j])}</tr>`).join("")}</tbody></table>`;
+        <thead><tr><th scope="col">Super-link</th><th scope="col">True delay</th>${EST.map(e => `<th scope="col">${e.name}</th>`).join("")}</tr></thead>
+        <tbody>${cols.map((s, j) => `<tr><th scope="row" class="lab-mono">${esc(s.label)}</th>${cell(r.beta[j], "is-truthcell")}${EST.map(e => cell(estOf(e, j))).join("")}</tr>`).join("")}</tbody></table>`;
     }
 
-    // overall metrics
-    const better = (a, b, lowerWins) => {
-      if (a === null || b === null || Math.abs(a - b) < 1e-9) return ["", ""];
-      return (lowerWins ? a < b : a > b) ? ["is-better", ""] : ["", "is-better"];
+    // marks the best value(s) among the estimators that have finished
+    const bestMarks = (vals, lowerWins) => {
+      const ok = vals.filter(v => v !== null && v !== undefined && Number.isFinite(v));
+      if (ok.length < 2 || lowerWins === null) return vals.map(() => "");
+      const best = lowerWins ? Math.min(...ok) : Math.max(...ok);
+      const allSame = ok.every(v => Math.abs(v - best) < 1e-9);
+      return vals.map(v => (v !== null && v !== undefined && !allSame && Math.abs(v - best) < 1e-9 ? "is-better" : ""));
     };
+    const rowCells = (vals, f, lowerWins) => {
+      const marks = bestMarks(vals, lowerWins);
+      return vals.map((v, i) => (v === undefined ? `<td class="lab-num is-pending">…</td>` : `<td class="lab-num ${marks[i]}">${f(v)}</td>`)).join("");
+    };
+    const pick = fn => EST.map(e => (m[e.key] ? fn(e.key) : undefined));
+
     const overallRows = [
-      ["Signed support recovery", mO.overall.ssr, mN.overall.ssr, pct, false,
+      ["Signed support recovery", pick(k => m[k].overall.ssr), pct, false,
        "Share of super-links whose estimate has the true sign: positive for delayed links, zero (within the tolerance) for delay-free ones."],
-      ["Relative L2 error", mO.overall.rl2, mN.overall.rl2, v => fmt(v), true,
+      ["Relative L2 error", pick(k => m[k].overall.rl2), v => fmt(v), true,
        "‖estimate − truth‖ / ‖truth‖ over all super-links."],
-      ["Recall", mO.overall.recall, mN.overall.recall, pct, false,
+      [`NDCG@${K}`, pick(k => nd[k].ndcg), v => fmt(v), false,
+       `How well the ranking of the estimates puts the most delayed super-links first, over the top ${K}. Gains are the true delays; 1 is a perfect ranking. Tied estimates share a rank, and a tie at the cutoff brings in the whole tied group.`],
+      [`Links counted in NDCG@${K}`, pick(k => nd[k].counted), v => String(v), null,
+       `More than ${K} when estimates are tied at the cutoff.`],
+      ["Recall", pick(k => m[k].overall.recall), pct, false,
        "Of the super-links with a true delay above 0, the share estimated above the zero tolerance."],
-      ["Precision", mO.overall.precision, mN.overall.precision, pct, false,
+      ["Precision", pick(k => m[k].overall.precision), pct, false,
        "Of the super-links estimated above the zero tolerance, the share that truly have a delay."],
-      ["Negative delay estimates", mO.overall.negatives, mN.overall.negatives, v => String(v), true,
+      ["Negative delay estimates", pick(k => m[k].overall.negatives), v => String(v), true,
        "Super-links estimated below −(zero tolerance): delays that cannot occur physically."],
-      ["Most negative estimate", mO.overall.mostNegative, mN.overall.mostNegative, v => fmt(v), null, ""],
+      ["Most negative estimate", pick(k => m[k].overall.mostNegative), v => fmt(v), null, ""],
     ];
     const overall = `<table class="lab-table lab-metrics">
-      <thead><tr><th scope="col">Metric</th><th scope="col">Vanilla OLS</th><th scope="col">Vanilla NNLS</th><th scope="col" class="lab-def-col">What it measures</th></tr></thead>
-      <tbody>${overallRows.map(([name, a, b, f, low, def]) => {
-        const [ca, cb] = low === null ? ["", ""] : better(a, b, low);
-        return `<tr><th scope="row">${name}</th><td class="lab-num ${ca}">${f(a)}</td><td class="lab-num ${cb}">${f(b)}</td><td class="lab-def">${def}</td></tr>`;
-      }).join("")}</tbody></table>`;
+      <thead><tr><th scope="col">Metric</th>${EST.map(e => `<th scope="col">${e.name}</th>`).join("")}<th scope="col" class="lab-def-col">What it measures</th></tr></thead>
+      <tbody>${overallRows.map(([name, vals, f, low, def]) =>
+        `<tr><th scope="row">${name}</th>${rowCells(vals, f, low)}<td class="lab-def">${def}</td></tr>`).join("")}</tbody></table>`;
 
     // per-bin metrics
-    const binRows = mO.bins.map((bo, i) => {
-      const bn = mN.bins[i];
-      const pair = (a, b, f, low) => { const [ca, cb] = better(a, b, low); return `<td class="lab-num ${ca}">${f(a)}</td><td class="lab-num ${cb}">${f(b)}</td>`; };
+    const binsOf = k => m[k].bins;
+    const binRows = m.ols.bins.map((bo, i) => {
+      const grp = (fn, f, low) => rowCells(EST.map(e => (m[e.key] ? fn(binsOf(e.key)[i]) : undefined)), f, low);
       return `<tr><th scope="row" class="lab-mono">${fmt(bo.value, 3)}</th><td class="lab-num">${bo.n}</td>
-        ${pair(bo.ssr, bn.ssr, pct, false)}${pair(bo.rl2, bn.rl2, v => fmt(v), true)}
-        ${pair(bo.recall, bn.recall, pct, false)}${pair(bo.precision, bn.precision, pct, false)}</tr>`;
+        ${grp(b => b.ssr, pct, false)}${grp(b => b.rl2, v => fmt(v), true)}
+        ${grp(b => b.recall, pct, false)}${grp(b => b.precision, pct, false)}</tr>`;
     }).join("");
+    const subHead = EST.map(e => `<th scope="col">${e.short}</th>`).join("");
     const bins = `<table class="lab-table lab-bins">
       <thead>
         <tr><th scope="col" rowspan="2">True delay</th><th scope="col" rowspan="2">Super-links</th>
-          <th scope="colgroup" colspan="2">Signed support recovery</th><th scope="colgroup" colspan="2">Relative L2</th>
-          <th scope="colgroup" colspan="2">Recall (value band)</th><th scope="colgroup" colspan="2">Precision (value band)</th></tr>
-        <tr>${"<th scope=\"col\">OLS</th><th scope=\"col\">NNLS</th>".repeat(4)}</tr>
+          <th scope="colgroup" colspan="4">Signed support recovery</th><th scope="colgroup" colspan="4">Relative L2</th>
+          <th scope="colgroup" colspan="4">Recall (value band)</th><th scope="colgroup" colspan="4">Precision (value band)</th></tr>
+        <tr>${subHead.repeat(4)}</tr>
       </thead><tbody>${binRows}</tbody></table>`;
 
     out.innerHTML = `
       <div class="lab-facts">${facts.map(([k, v]) => `<div><p class="lab-fact-k">${k}</p><p class="lab-fact-v">${v}</p></div>`).join("")}</div>
       <div class="lab-notes">${notes.map(n => `<p>${n}</p>`).join("")}</div>
-      <p class="lab-small lab-run">One simulated experiment: ${sim.probes} probe${sim.probes == 1 ? "" : "s"} per route, noise sd ${sim.sigma} per probe, seed ${sim.seed}.
-        Both estimators are fitted to the same route-mean delays on the 0/1 routing matrix, with no weights, subsampling or thresholds.</p>
+      <p class="lab-small">One simulated experiment: ${sim.probes} probe${sim.probes == 1 ? "" : "s"} per route, noise sd ${sim.sigma} per probe, seed ${sim.seed}.
+        OLS, LASSO and NNLS are fitted to the same route-mean delays on the 0/1 routing matrix with no weights;
+        LASSO uses &alpha; = ${r.alpha.toPrecision(3)}${sim.lassoAlpha === null ? " (automatic)" : ""}.
+        Stability-selected NNLS follows the paper: route weights m/v&#770;, within-route half-subsamples, selection over the c-grid, and a non-negative refit on the stable set.</p>
+      <p class="lab-small">${ssLine}</p>
 
       <h3 class="lab-h3">Reconstructed delays</h3>
       <p class="lab-small">Values below −${sim.zeroTol} are <span class="lab-neg-key">highlighted</span>; values within ±${sim.zeroTol} of zero are dimmed.</p>
@@ -594,12 +673,13 @@
 
       <h3 class="lab-h3">By true delay value</h3>
       <div class="lab-scroll">${bins}</div>
-      <p class="lab-small lab-foot">Each row groups the super-links with that true delay. Signed support recovery and relative L2 are
+      <p class="lab-small">Each row groups the super-links with that true delay. Signed support recovery and relative L2 are
         computed on that group (relative L2 divides by ‖truth‖ over all super-links, so rows add up in squares to the overall value).
         For the value-band columns every estimate is assigned to the nearest true delay value in this design (or 0):
         recall is the share of the group assigned to its own value, precision is the share of links assigned to that value
-        that truly have it. The better of the two estimators is <span class="is-better-key">marked</span> where they differ.</p>`;
+        that truly have it. The best estimator is <span class="is-better-key">marked</span> on each row where they differ.</p>`;
   }
+
 
   /* ---------- refresh & controls ---------- */
   let lastFlash = 0;
@@ -608,6 +688,8 @@
   function syncSimInputs() {
     $("lab-probes").value = sim.probes; $("lab-sigma").value = sim.sigma;
     $("lab-seed").value = sim.seed; $("lab-tol").value = sim.zeroTol;
+    $("lab-alpha").value = sim.lassoAlpha === null ? "" : sim.lassoAlpha;
+    $("lab-B").value = sim.B; $("lab-pi0").value = sim.pi0; $("lab-K").value = sim.K;
   }
 
   function refresh(opts) {
@@ -638,7 +720,9 @@
   $("lab-zeroall").addEventListener("click", () => { nodes.forEach(n => { n.delay = 0; }); refresh(); });
 
   [["lab-probes", "probes", v => Math.max(1, Math.round(v))], ["lab-sigma", "sigma", v => Math.max(0, v)],
-   ["lab-seed", "seed", v => Math.max(1, Math.round(v))], ["lab-tol", "zeroTol", v => Math.max(0, v)]]
+   ["lab-seed", "seed", v => Math.max(1, Math.round(v))], ["lab-tol", "zeroTol", v => Math.max(0, v)],
+   ["lab-B", "B", v => Math.max(5, Math.min(500, Math.round(v)))], ["lab-pi0", "pi0", v => Math.max(0.05, Math.min(1, v))],
+   ["lab-K", "K", v => Math.max(1, Math.round(v))]]
     .forEach(([id, key, clean]) => $(id).addEventListener("change", () => {
       const v = parseNum($(id).value);
       if (v !== null) sim[key] = clean(v);
@@ -646,6 +730,13 @@
       refresh({ keepPanel: true, keepDelays: true });
     }));
 
+  $("lab-alpha").addEventListener("change", () => {
+    const raw = $("lab-alpha").value.trim();
+    const v = raw === "" ? null : parseNum(raw);
+    sim.lassoAlpha = v === null ? null : Math.max(0, v);
+    syncSimInputs();
+    refresh({ keepPanel: true, keepDelays: true });
+  });
   $("lab-redraw").addEventListener("click", () => { sim.seed += 1; syncSimInputs(); refresh({ keepPanel: true, keepDelays: true }); });
   $("lab-orient").addEventListener("click", () => { linksAsRows = !linksAsRows; refresh({ keepPanel: true, keepDelays: true }); });
 
