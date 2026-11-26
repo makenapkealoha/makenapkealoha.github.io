@@ -1004,6 +1004,7 @@ p a:hover {
   gap: clamp(1.75rem, 3vw, 2.5rem);
 }
 .lab > *, .lab-block > *, .lab-card > * { min-width: 0; }
+.lab [hidden] { display: none !important; }
 .lab-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
@@ -1063,6 +1064,12 @@ p a:hover {
   padding: 0.3rem 0.45rem; width: 5.2rem; font-variant-numeric: tabular-nums;
 }
 .lab input.lab-wide { width: 100%; flex: 1 1 10rem; }
+.lab select {
+  font-family: var(--body); font-size: 0.85rem; color: var(--paper);
+  background: var(--ink-sunken); border: 1px solid var(--line); border-radius: 3px;
+  padding: 0.3rem 0.4rem; width: 100%; flex: 1 1 12rem; min-width: 0;
+}
+.lab select:focus-visible { outline: 2px solid var(--trace); outline-offset: 1px; }
 .lab textarea { width: 100%; resize: vertical; margin-top: 0.3rem; }
 .lab input:focus-visible, .lab textarea:focus-visible, .lab button:focus-visible, .lab summary:focus-visible {
   outline: 2px solid var(--trace); outline-offset: 1px;
