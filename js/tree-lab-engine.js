@@ -114,11 +114,56 @@
   }
 
   /* ---------- estimators ---------- */
-  // Minimum-norm least squares. For a forking tree every route has its own
-  // leaf link, so X has full row rank and beta = X' (X X')^{-1} y.
-  function olsMinNorm(X, y) {
-    const XXt = X.map(ri => X.map(rj => ri.reduce((s, a, j) => s + a * rj[j], 0)));
-    return matTVec(X, spdSolve(XXt, y));
+  // Thin SVD X = U diag(s) V' by one-sided Jacobi rotations on X' (p x n), so
+  // the n columns being orthogonalised are the routes. Returns U (n x r), s, V (p x r)
+  // with r = min(n, p), in the orientation of X.
+  function svd(X) {
+    const n = X.length, p = n ? X[0].length : 0;
+    // work on columns of M = X' : M[j][i] = X[i][j]; store as n column vectors of length p
+    const cols = Array.from({ length: n }, (_, i) => X[i].slice());   // column i of X' is row i of X
+    const Vc = Array.from({ length: n }, (_, i) => { const e = new Array(n).fill(0); e[i] = 1; return e; });
+    const eps = 2.220446049250313e-16;
+    for (let sweep = 0; sweep < 60; sweep++) {
+      let rotated = false;
+      for (let a = 0; a < n - 1; a++) for (let b = a + 1; b < n; b++) {
+        const ca = cols[a], cb = cols[b];
+        let alpha = 0, beta = 0, gamma = 0;
+        for (let k = 0; k < p; k++) { alpha += ca[k] * ca[k]; beta += cb[k] * cb[k]; gamma += ca[k] * cb[k]; }
+        if (Math.abs(gamma) <= eps * Math.sqrt(alpha * beta) || gamma === 0) continue;
+        rotated = true;
+        const zeta = (beta - alpha) / (2 * gamma);
+        const t = Math.sign(zeta || 1) / (Math.abs(zeta) + Math.sqrt(1 + zeta * zeta));
+        const c = 1 / Math.sqrt(1 + t * t), s = c * t;
+        for (let k = 0; k < p; k++) { const x = ca[k], y = cb[k]; ca[k] = c * x - s * y; cb[k] = s * x + c * y; }
+        const va = Vc[a], vb = Vc[b];
+        for (let k = 0; k < n; k++) { const x = va[k], y = vb[k]; va[k] = c * x - s * y; vb[k] = s * x + c * y; }
+      }
+      if (!rotated) break;
+    }
+    // X' W = cols  =>  singular values are the column norms; X = W diag(s) Q'
+    const sv = cols.map(c => Math.sqrt(c.reduce((t, a) => t + a * a, 0)));
+    const order = sv.map((v, i) => i).sort((i, j) => sv[j] - sv[i]);
+    const s = order.map(i => sv[i]);
+    const V = order.map(i => cols[i].map(a => (sv[i] > 0 ? a / sv[i] : 0)));   // right vectors, length p
+    const U = order.map(i => Vc[i].slice());                                     // left vectors, length n
+    return { U, s, V };     // U[k] in R^n, V[k] in R^p
+  }
+
+  // Vanilla OLS exactly as numpy.linalg.lstsq(X, y, rcond=None): the minimum-norm
+  // least-squares solution X^+ y from the SVD, dropping singular values at or below
+  // eps * max(n, p) * s_max.
+  // `dec` is an optional precomputed svd(X), reused while the tree's shape is unchanged.
+  function olsMinNorm(X, y, dec) {
+    const n = X.length, p = X[0].length;
+    const { U, s, V } = dec || svd(X);
+    const cut = 2.220446049250313e-16 * Math.max(n, p) * (s[0] || 0);
+    const beta = new Array(p).fill(0);
+    s.forEach((sk, k) => {
+      if (!(sk > cut)) return;
+      const coef = U[k].reduce((t, u, i) => t + u * y[i], 0) / sk;
+      for (let j = 0; j < p; j++) beta[j] += coef * V[k][j];
+    });
+    return beta;
   }
 
   // Lawson–Hanson NNLS: min ||X b - y|| subject to b >= 0.
@@ -269,6 +314,77 @@
     return { G, h, bNorm: Math.sqrt(bb) };
   }
 
+  /* ---------- the paper's sparsity regimes for forks ---------- */
+  // Port of the notebook's _make_regime_beta (random value ordering) for fork trees.
+  //   "unidentifiable": every link delayed.
+  //   "identifiable"  : for every fork motif (a non-root router with an incoming link
+  //                     and k >= 2 outgoing links) one outgoing link, chosen at random,
+  //                     is set to 0 (thm:motif-conditions).
+  //   "sparse"        : identifiable, then extraPct % of the still-delayed links are
+  //                     set to 0 at random.
+  // Links leaving the root monitor are never set to 0. If fewer delayed links remain
+  // than there are values, links zeroed by the extra step are brought back (the
+  // notebook's survivor rule), but never a motif's zero, so the identifiability
+  // condition always holds. The delayed links share the values as evenly as possible.
+  // Returns a Map node id -> delay.
+  function paperDelays(nodes, mode, extraPct, values, seed) {
+    const rng = mulberry32(seed >>> 0);
+    const pickIdx = n => Math.floor(rng() * n);
+    const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = pickIdx(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+    const kids = new Map(nodes.map(n => [n.id, []]));
+    let root = null;
+    nodes.forEach(n => { if (n.parent === null) root = n.id; else kids.get(n.parent).push(n.id); });
+    const links = nodes.filter(n => n.parent !== null).map(n => n.id);
+    const rootLinks = new Set(kids.get(root));
+    const zero = new Set();
+
+    if (mode === "identifiable" || mode === "sparse") {
+      nodes.forEach(n => {
+        if (n.parent === null) return;
+        const out = kids.get(n.id);
+        if (out.length >= 2) zero.add(out[pickIdx(out.length)]);
+      });
+    }
+    const extraZero = new Set();
+    if (mode === "sparse") {
+      const eligible = links.filter(id => !zero.has(id) && !rootLinks.has(id));
+      const nZero = Math.round((Math.max(0, Math.min(100, extraPct)) / 100) * eligible.length);
+      shuffle(eligible.slice()).slice(0, nZero).forEach(id => { zero.add(id); extraZero.add(id); });
+    }
+    // survivor rule: keep at least one delayed link per value, when possible
+    const vals = values.length ? values.slice() : [1];
+    let survivors = links.filter(id => !zero.has(id));
+    if (survivors.length < vals.length) {
+      // only links zeroed by the extra step come back, so every motif keeps its zero
+      const back = shuffle([...extraZero]).slice(0, vals.length - survivors.length);
+      back.forEach(id => zero.delete(id));
+      survivors = links.filter(id => !zero.has(id));
+    }
+    // even spread of the values over the delayed links
+    const out = new Map(links.map(id => [id, 0]));
+    shuffle(survivors);
+    if (survivors.length < vals.length) vals.splice(0, vals.length, ...shuffle(vals.slice()).slice(0, survivors.length));
+    const base = Math.floor(survivors.length / vals.length);
+    const extra = survivors.length - base * vals.length;
+    const bonus = new Set(shuffle(vals.map((_, i) => i)).slice(0, extra));
+    let pos = 0;
+    vals.forEach((v, i) => {
+      const take = base + (bonus.has(i) ? 1 : 0);
+      for (let t = 0; t < take; t++) out.set(survivors[pos++], v);
+    });
+    return out;
+  }
+
+  // The paper's topological identifiability: the columns of the active (delayed)
+  // super-links are linearly independent, so Sigma_SS is invertible.
+  function activeColumnsIndependent(Xs, beta) {
+    const S = [];
+    beta.forEach((b, j) => { if (b !== 0) S.push(j); });
+    if (!S.length) return { ok: true, nActive: 0, rank: 0 };
+    const r = rank(Xs.map(row => S.map(j => row[j])));
+    return { ok: r === S.length, nActive: S.length, rank: r };
+  }
+
   /* ---------- tree -> design ---------- */
   // nodes: [{id, parent, delay}] with the root monitor having parent === null.
   // A link is the edge into a non-root node; its delay lives on that node.
@@ -334,7 +450,7 @@
     const ybar = probes.map(v => v.reduce((s, a) => s + a, 0) / m);
     const alpha = lassoAlpha(opts, design.Xs);
     return { beta, probes, ybar, alpha,
-             ols: olsMinNorm(design.Xs, ybar),
+             ols: olsMinNorm(design.Xs, ybar, opts.svd),
              lasso: lasso(design.Xs, ybar, alpha),
              nnls: nnlsUnit(design.Xs, ybar) };
   }
@@ -621,8 +737,8 @@
   }
 
   const api = { mulberry32, gaussian, olsMinNorm, nnls, nnlsIsUnique, nullSpace,
-                buildDesign, simulate, metrics, rank, lasso, lassoAlpha,
-                ssStart, ssStep, ssFinish, weightedSystem, nnlsGram, nnlsUnit, weightedGram, ndcgAtK, C_GRID };
+                buildDesign, simulate, metrics, rank, lasso, lassoAlpha, svd,
+                ssStart, ssStep, ssFinish, paperDelays, activeColumnsIndependent, weightedSystem, nnlsGram, nnlsUnit, weightedGram, ndcgAtK, C_GRID };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TreeLabEngine = api;
 })(typeof window !== "undefined" ? window : this);

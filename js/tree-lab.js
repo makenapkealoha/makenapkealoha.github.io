@@ -175,11 +175,25 @@
             <input id="lab-values" type="text" value="1, 0.5, 0.05" class="lab-wide" />
           </div>
           <div class="lab-row">
+            <label for="lab-pattern">Which links are 0</label>
+            <select id="lab-pattern" class="lab-wide">
+              <option value="identifiable">Paper: topologically identifiable</option>
+              <option value="sparse">Paper: identifiable + extra zeros</option>
+              <option value="unidentifiable">Paper: no zeros (unidentifiable)</option>
+              <option value="random">Random share of zeros</option>
+            </select>
+          </div>
+          <div class="lab-row" id="lab-zero-row" hidden>
             <label for="lab-zero">Share set to 0</label>
             <input id="lab-zero" type="number" min="0" max="100" step="5" value="50" /><span class="lab-unit">%</span>
           </div>
+          <div class="lab-row" id="lab-extra-row" hidden>
+            <label for="lab-extra">Extra zeros, share of delayed links</label>
+            <input id="lab-extra" type="number" min="0" max="100" step="5" value="50" /><span class="lab-unit">%</span>
+          </div>
+          <p class="lab-small" id="lab-pattern-note"></p>
           <div class="lab-row lab-buttons">
-            <button class="lab-btn" id="lab-fill" type="button">Fill at random</button>
+            <button class="lab-btn" id="lab-fill" type="button">Fill delays</button>
             <button class="lab-btn" id="lab-zeroall" type="button">Set all to 0</button>
           </div>
         </div>
@@ -505,9 +519,18 @@
                            sim.probes, sim.sigma, sim.seed, sim.lassoAlpha]);
   }
 
+  // The SVD of the routing matrix depends only on the tree's shape.
+  let svdCache = { key: null, value: null };
+  let truthCache = { key: null, value: null };
+  function getSvd(D) {
+    const key = JSON.stringify(nodes.map(n => [n.id, n.parent]));
+    if (svdCache.key !== key) svdCache = { key, value: E.svd(D.Xs) };
+    return svdCache.value;
+  }
+
   function getFits(D) {
     const key = designKey();
-    if (fitCache.key !== key) fitCache = { key, value: E.simulate(D, sim) };
+    if (fitCache.key !== key) fitCache = { key, value: E.simulate(D, Object.assign({}, sim, { svd: getSvd(D) })) };
     return fitCache.value;
   }
 
@@ -557,13 +580,19 @@
     avail.forEach(e => { m[e.key] = E.metrics(r.beta, est[e.key], sim.zeroTol); nd[e.key] = E.ndcgAtK(r.beta, est[e.key], K); });
 
     const nSL = D.superLinks.length, nR = D.routes.length;
-    const rank = E.rank(D.Xs);
-    let identifiable = null;
-    if (r.beta.every(v => v >= 0)) {
-      try { identifiable = E.nnlsIsUnique(D.Xs, r.beta); } catch (e) { identifiable = null; }
+    // checks that depend only on the tree and its true delays, cached across noise draws
+    const truthKey = JSON.stringify(nodes.map(n => [n.id, n.parent, Number(n.delay) || 0]));
+    if (truthCache.key !== truthKey) {
+      const topo = E.activeColumnsIndependent(D.Xs, r.beta);
+      let identifiable = null;
+      if (r.beta.every(v => v >= 0)) {
+        try { identifiable = E.nnlsIsUnique(D.Xs, r.beta); } catch (e) { identifiable = null; }
+      }
+      const clean = D.Xs.map(row => row.reduce((t, a, j) => t + a * r.beta[j], 0));
+      const olsExact = norm2(E.olsMinNorm(D.Xs, clean, getSvd(D)).map((v, j) => v - r.beta[j])) < 1e-8;
+      truthCache = { key: truthKey, value: { topo, identifiable, olsExact, rank: E.rank(D.Xs) } };
     }
-    const clean = D.Xs.map(row => row.reduce((t, a, j) => t + a * r.beta[j], 0));
-    const olsExact = norm2(E.olsMinNorm(D.Xs, clean).map((v, j) => v - r.beta[j])) < 1e-8;
+    const { topo, identifiable, olsExact, rank } = truthCache.value;
 
     const merged = D.superLinks.filter(s => s.ids.length > 1);
     const facts = [["Links", D.order.length], ["Super-links fitted", nSL], ["Routes", nR], ["Rank of design", `${rank} of ${nSL}`]];
@@ -572,9 +601,12 @@
     notes.push(rank < nSL
       ? `The design has more super-links than independent routes, so infinitely many delay vectors fit the route means equally well. Vanilla OLS returns the one with the smallest norm.`
       : `The design has full column rank, so OLS has a single solution.`);
-    if (identifiable === true) notes.push(`<span class="lab-ok">Identifiable under non-negativity:</span> with noise-free route measurements, these true delays are the only non-negative vector that fits, so NNLS would recover them exactly${olsExact ? ", and so would OLS" : "; OLS would not, because it returns the minimum-norm fit"}.`);
-    if (identifiable === false) notes.push(`<strong>Not identifiable under non-negativity:</strong> even with noise-free route measurements, another non-negative delay vector fits exactly as well as the true one, so NNLS cannot be guaranteed to find the truth on this design and delay pattern.`);
-    if (identifiable === null) notes.push(`Some true delays are negative, so the identifiability check under non-negativity does not apply.`);
+    notes.push(topo.ok
+      ? `<span class="lab-ok">Topologically identifiable:</span> the ${topo.nActive} delayed super-links have linearly independent columns, so &Sigma;<sub>SS</sub> is invertible (the paper's condition). Once the delayed set is found, its delays are determined.`
+      : `<strong>Not topologically identifiable:</strong> the ${topo.nActive} delayed super-links have column rank ${topo.rank}, so &Sigma;<sub>SS</sub> is singular. Some delayed links can trade delay with each other without changing any route, typically a branching router whose outgoing links are all delayed.`);
+    if (identifiable === true) notes.push(`<span class="lab-ok">Unique non-negative fit:</span> with noise-free route measurements, these true delays are the only non-negative vector that fits, so NNLS would recover them exactly${olsExact ? ", and so would OLS" : "; OLS would not, because it returns the minimum-norm fit"}.`);
+    if (identifiable === false) notes.push(`Not a unique non-negative fit: even with noise-free route measurements, another non-negative delay vector fits exactly${topo.ok ? ", for example by moving part of a delayed link's delay onto all of the links below it" : ""}. This is a stronger requirement than the paper's condition.`);
+    if (identifiable === null) notes.push(`Some true delays are negative, so the non-negative uniqueness check does not apply.`);
 
     const ssLine = ss.done
       ? `Stability selection: ${ss.value.stable.length} of ${nSL} super-links stable at &pi;<sub>0</sub> = ${sim.pi0} (B = ${ss.value.B}, c* = ${ss.value.cStar.toExponential(1)}), then refitted by NNLS on that set.`
@@ -701,22 +733,47 @@
     $("lab-orient").textContent = linksAsRows ? "Show links as columns" : "Show links as rows";
   }
 
+  const PATTERN_NOTE = {
+    identifiable: "At every branching router below the root, one outgoing link is set to 0 at random (the paper's fork condition). Links out of the root monitor always keep a delay. Delayed links share the values evenly.",
+    sparse: "Topologically identifiable first, then this share of the remaining delayed links is also set to 0 at random. Links out of the root monitor always keep a delay.",
+    unidentifiable: "Every link gets a delay; the values are shared evenly.",
+    random: "Each link is set to 0 with this probability, otherwise it gets one of the values at random.",
+  };
+  function syncPatternUI() {
+    const mode = $("lab-pattern").value;
+    $("lab-zero-row").hidden = mode !== "random";
+    $("lab-extra-row").hidden = mode !== "sparse";
+    $("lab-pattern-note").textContent = PATTERN_NOTE[mode];
+  }
+  $("lab-pattern").addEventListener("change", syncPatternUI);
+
+  // Fill delays with the chosen pattern. Returns false (with a message) on bad input.
+  function fillDelays() {
+    const vals = $("lab-values").value.split(/[,\s]+/).filter(t => t !== "").map(parseNum).filter(v => v !== null);
+    if (!vals.length) { flash("Enter at least one value to fill with, for example 1, 0.5, 0.05."); return false; }
+    const mode = $("lab-pattern").value;
+    if (mode === "random") {
+      const z = Math.max(0, Math.min(100, parseNum($("lab-zero").value) || 0)) / 100;
+      randomFill(vals, z);
+    } else {
+      const extra = Math.max(0, Math.min(100, parseNum($("lab-extra").value) || 0));
+      const m = E.paperDelays(nodes, mode, extra, vals, 7919 * fillSeed++ + 1);
+      nodes.forEach(n => { if (n.parent !== null) n.delay = m.get(n.id); });
+    }
+    return true;
+  }
+
   $("lab-build").addEventListener("click", () => {
     const L = Math.max(1, Math.min(8, Math.round(parseNum($("lab-layers").value) || 1)));
     const k = Math.max(1, Math.min(6, Math.round(parseNum($("lab-k").value) || 1)));
     const total = (k === 1 ? L : (Math.pow(k, L + 1) - 1) / (k - 1)) + 1;
     if (total > MAX_NODES) { flash(`That tree has ${total} routers; the limit is ${MAX_NODES}. Use fewer layers or children.`); return; }
     quickBuild(L, k, $("lab-stem").checked);
+    fillDelays();
     refresh();
   });
   $("lab-example").addEventListener("click", () => { loadExample(); refresh(); });
-  $("lab-fill").addEventListener("click", () => {
-    const vals = $("lab-values").value.split(/[,\s]+/).map(parseNum).filter(v => v !== null);
-    if (!vals.length) { flash("Enter at least one value to fill with, for example 1, 0.5, 0.05."); return; }
-    const z = Math.max(0, Math.min(100, parseNum($("lab-zero").value) || 0)) / 100;
-    randomFill(vals, z);
-    refresh();
-  });
+  $("lab-fill").addEventListener("click", () => { if (fillDelays()) refresh(); });
   $("lab-zeroall").addEventListener("click", () => { nodes.forEach(n => { n.delay = 0; }); refresh(); });
 
   [["lab-probes", "probes", v => Math.max(1, Math.round(v))], ["lab-sigma", "sigma", v => Math.max(0, v)],
@@ -769,6 +826,7 @@
     try { decodeDesign(fromHash(location.hash.slice(1))); loaded = true; } catch (e) { loaded = false; }
   }
   if (!loaded) loadExample();
+  syncPatternUI();
   syncSimInputs();
   refresh();
 })();
